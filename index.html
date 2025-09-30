@@ -1,3 +1,4 @@
+
 <!doctype html>
 <html lang="ja">
 <head>
@@ -220,6 +221,8 @@
           <div class="toolbar" style="margin-top:0">
             <div class="left"><h3 id="groupHeading" style="margin:0">全ての項目</h3></div>
             <div class="right">
+              <button id="renameGroupBtn" class="btn small" type="button" title="グループ名を変更">名称変更</button>
+              <button id="deleteGroupBtn" class="btn small ghost" type="button" title="グループを削除" style="border-color: var(--danger); color:#fecaca">削除</button>
               <button id="toInputTab" class="btn ghost small" type="button">入力タブへ</button>
             </div>
           </div>
@@ -345,6 +348,8 @@
     toInputTab: document.getElementById('toInputTab'),
     newGroupNameSidebar: document.getElementById('newGroupNameSidebar'),
     createGroupSidebar: document.getElementById('createGroupSidebar'),
+    renameGroupBtn: document.getElementById('renameGroupBtn'),
+    deleteGroupBtn: document.getElementById('deleteGroupBtn'),
 
     dlg: document.getElementById('tagDialog'),
     dlgGroupChecks: document.getElementById('dlgGroupChecks'),
@@ -431,6 +436,45 @@
     state.groups.push(g);
     return g;
   }
+
+
+  // 既存グループ名を変更（items 側のタグ名も一括置換）
+  async function renameGroup(groupId, newName){
+    const nm = normalize(newName);
+    if (!nm) { toast('新しいグループ名を入力してください'); return false; }
+    if (nm === 'グループ外' || nm === 'グループ外（自動）') { toast('その名称は使用できません'); return false; }
+    const g = getGroupById(groupId); if (!g) { toast('グループが見つかりません'); return false; }
+    if (state.groups.some(x => x.name === nm && x.id !== groupId)) { toast('同名のグループが既にあります'); return false; }
+    const oldName = g.name;
+    g.name = nm;
+    await put(state.db, STORE_GROUPS, g);
+    // items のタグ差し替え
+    const touched = [];
+    for (const it of state.items) {
+      if (Array.isArray(it.groups) && it.groups.includes(oldName)) {
+        it.groups = it.groups.map(n => n === oldName ? nm : n).sort((a,b)=>a.localeCompare(b,'ja'));
+        await put(state.db, STORE_ITEMS, it);
+        touched.push(it.id);
+      }
+    }
+    return true;
+  }
+
+  // グループ削除（items 側の該当タグを除去）
+  async function removeGroup(groupId){
+    const g = getGroupById(groupId); if (!g) { toast('グループが見つかりません'); return false; }
+    const name = g.name;
+    await del(state.db, STORE_GROUPS, groupId);
+    state.groups = state.groups.filter(x => x.id !== groupId);
+    for (const it of state.items) {
+      if (Array.isArray(it.groups) && it.groups.includes(name)) {
+        it.groups = it.groups.filter(n => n !== name);
+        await put(state.db, STORE_ITEMS, it);
+      }
+    }
+    return true;
+ }
+
   function getGroupById(id){ return state.groups.find(g=>g.id===id); }
   function getAllGroupsForUI(){ return [{id:'all', name:'全て'}, {id:'__ungrouped', name:'グループ外（自動）'}, ...state.groups.slice().sort(byName)]; }
   function countItemsInGroup(groupId){
@@ -510,6 +554,11 @@
     const id = state.ui.activeGroupId;
     const title = getAllGroupsForUI().find(g=>g.id===id)?.name || '全て';
     els.groupHeading.textContent = title;
+    if (els.renameGroupBtn && els.deleteGroupBtn) {
+      const show = !(id === 'all' || id === '__ungrouped');
+      els.renameGroupBtn.style.display = show ? 'inline-flex' : 'none';
+      els.deleteGroupBtn.style.display = show ? 'inline-flex' : 'none';
+    }
     let items = [];
     if(id==='all'){ items = state.items.slice(); }
     else if(id==='__ungrouped'){ items = state.items.filter(it=> (it.groups||[]).length===0); }
@@ -614,6 +663,27 @@ els.exportBtn.addEventListener('click', async ()=>{
 
   els.groupSearch.addEventListener('input', ()=>{ state.ui.groupQuery = els.groupSearch.value; renderGroupList(); renderGroupItems(); });
   els.toInputTab.addEventListener('click', ()=>{ els.tabs[0].click(); });
+
+  // グループ名変更
+  els.renameGroupBtn.addEventListener('click', async ()=>{
+    const id = state.ui.activeGroupId;
+    if (id === 'all' || id === '__ungrouped') return;
+    const g = getGroupById(id); if (!g) return;
+    const nm = prompt('新しいグループ名を入力', g.name);
+    if (nm == null) return; // cancel
+    const ok = await renameGroup(id, nm);
+    if (ok) { renderGroupList(); renderGroupItems(); toast('グループ名を変更しました'); }
+  });
+
+  // グループ削除
+  els.deleteGroupBtn.addEventListener('click', async ()=>{
+    const id = state.ui.activeGroupId;
+    if (id === 'all' || id === '__ungrouped') return;
+    const g = getGroupById(id); if (!g) return;
+    if (!confirm(`グループ「${g.name}」を削除します。関連付けは項目から外れます。よろしいですか？`)) return;
+    const ok = await removeGroup(id);
+    if (ok) { state.ui.activeGroupId = 'all'; renderGroupList(); renderGroupItems(); toast('グループを削除しました'); }
+  });
   els.createGroupSidebar.addEventListener('click', async ()=>{ const name=els.newGroupNameSidebar.value; const g=await createGroup(name); if(g){ els.newGroupNameSidebar.value=''; renderGroupList(); toast('グループを作成しました'); }});
 
   els.dlg.addEventListener('click', (e)=>{ if(e.target.hasAttribute('data-dismiss')) closeDlg(); });
